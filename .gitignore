@@ -1,0 +1,12 @@
+# build output
+*.exe
+*.o
+
+# per-user data
+progress.json
+settings.json
+*.tmp
+
+# server
+server/node_modules/
+server/.wrangler/

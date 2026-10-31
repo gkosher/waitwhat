@@ -1,0 +1,17 @@
+{
+  "name": "Example: World capitals",
+  "cards": [
+    { "q": "Capital of Japan?", "a": "Tokyo" },
+    { "q": "Capital of Australia?", "a": "Canberra", "note": "Not Sydney - Canberra was purpose-built as a compromise between Sydney and Melbourne." },
+    { "q": "Capital of Canada?", "a": "Ottawa" },
+    { "q": "Capital of Brazil?", "a": "Brasilia", "note": "Rio de Janeiro was the capital until 1960." },
+    { "q": "Capital of Turkey?", "a": "Ankara" },
+    { "q": "Capital of Egypt?", "a": "Cairo" },
+    { "q": "Capital of South Korea?", "a": "Seoul" },
+    { "q": "Capital of New Zealand?", "a": "Wellington" },
+    { "q": "Capital of the United States?", "a": ["Washington, D.C.", "Washington DC", "Washington"] },
+    { "q": "Capital of Switzerland?", "a": ["Bern", "Berne"], "note": "Officially it's the 'federal city' - Switzerland has no de jure capital." },
+    { "q": "Capital of Morocco?", "a": "Rabat" },
+    { "q": "Capital of Vietnam?", "a": ["Hanoi", "Ha Noi"] }
+  ]
+}
