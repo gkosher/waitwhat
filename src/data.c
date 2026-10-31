@@ -715,6 +715,27 @@ static int levenshtein(const wchar_t *a, int la, const wchar_t *b, int lb) {
   return row[lb];
 }
 
+/* crude stemming of a normalized string, word by word, so word forms match:
+** "context switching" == "context switch", "interrupts" == "interrupt" */
+static int stem(const wchar_t *s, wchar_t *out) {
+  int j = 0;
+  while (*s) {
+    int len = 0, n;
+    while (s[len] && s[len] != L' ') { len++; }
+    n = len;
+    if (n > 5 && wcsncmp(s + n - 3, L"ing", 3) == 0) { n -= 3; }
+    else if (n > 4 && wcsncmp(s + n - 2, L"ed", 2) == 0) { n -= 2; }
+    else if (n > 4 && wcsncmp(s + n - 2, L"es", 2) == 0) { n -= 2; }
+    else if (n > 3 && s[n - 1] == L's' && s[n - 2] != L's') { n -= 1; }
+    memcpy(out + j, s, n * sizeof(wchar_t));
+    j += n;
+    s += len;
+    if (*s) { out[j++] = L' '; s++; }
+  }
+  out[j] = 0;
+  return j;
+}
+
 /* is `in` exactly `ans` with one extra character inserted? ("hlt" -> "halt") */
 static int one_insertion(const wchar_t *ans, int la, const wchar_t *in, int lin) {
   int i = 0, j = 0, skipped = 0;
@@ -728,12 +749,15 @@ static int one_insertion(const wchar_t *ans, int la, const wchar_t *in, int lin)
 }
 
 int check_answer(const char *const *answers, int n, const char *input) {
-  wchar_t in[NORM_CAP], ans[NORM_CAP];
+  wchar_t in[NORM_CAP], ans[NORM_CAP], in_stem[NORM_CAP], ans_stem[NORM_CAP];
   int lin = normalize(input, in), i, best = ANSWER_WRONG;
   if (lin == 0) { return ANSWER_WRONG; }
+  stem(in, in_stem);
   for (i = 0; i < n; i++) {
     int la = normalize(answers[i], ans), allowed, k, digits = 0;
     if (la == lin && wcscmp(ans, in) == 0) { return ANSWER_EXACT; }
+    stem(ans, ans_stem);
+    if (wcscmp(ans_stem, in_stem) == 0) { return ANSWER_EXACT; }
     /* forgive small typos, but never on numbers: 1945 is not 1946 */
     for (k = 0; k < la; k++) { if (iswdigit(ans[k])) { digits = 1; } }
     allowed = digits ? 0 : (la >= 10 ? 2 : (la >= 5 ? 1 : 0));
