@@ -889,6 +889,18 @@ static int stem(const wchar_t *s, wchar_t *out) {
   return j;
 }
 
+/* drop accents: "té" -> "te", "mézon" -> "mezon" (decompose, remove combining marks) */
+static void strip_accents(const wchar_t *s, wchar_t *out) {
+  wchar_t tmp[NORM_CAP * 2];
+  int n = FoldStringW(MAP_COMPOSITE, s, -1, tmp, NORM_CAP * 2), i, j = 0;
+  if (n <= 0) { wcscpy(out, s); return; }
+  for (i = 0; i < n && tmp[i]; i++) {
+    if (tmp[i] >= 0x300 && tmp[i] <= 0x36F) { continue; }
+    if (j < NORM_CAP - 1) { out[j++] = tmp[i]; }
+  }
+  out[j] = 0;
+}
+
 /* is `in` exactly `ans` with one extra character inserted? ("hlt" -> "halt") */
 static int one_insertion(const wchar_t *ans, int la, const wchar_t *in, int lin) {
   int i = 0, j = 0, skipped = 0;
@@ -903,14 +915,19 @@ static int one_insertion(const wchar_t *ans, int la, const wchar_t *in, int lin)
 
 int check_answer(const char *const *answers, int n, const char *input) {
   wchar_t in[NORM_CAP], ans[NORM_CAP], in_stem[NORM_CAP], ans_stem[NORM_CAP];
+  wchar_t in_plain[NORM_CAP], ans_plain[NORM_CAP];
   int lin = normalize(input, in), i, best = ANSWER_WRONG;
   if (lin == 0) { return ANSWER_WRONG; }
   stem(in, in_stem);
+  strip_accents(in, in_plain);
   for (i = 0; i < n; i++) {
     int la = normalize(answers[i], ans), allowed, k, digits = 0;
     if (la == lin && wcscmp(ans, in) == 0) { return ANSWER_EXACT; }
     stem(ans, ans_stem);
     if (wcscmp(ans_stem, in_stem) == 0) { return ANSWER_EXACT; }
+    /* right word, accents left off (hard to type): count it, but show the spelling */
+    strip_accents(ans, ans_plain);
+    if (wcscmp(ans_plain, in_plain) == 0) { best = ANSWER_CLOSE; continue; }
     /* forgive small typos, but never on numbers: 1945 is not 1946 */
     for (k = 0; k < la; k++) { if (iswdigit(ans[k])) { digits = 1; } }
     allowed = digits ? 0 : (la >= 10 ? 2 : (la >= 5 ? 1 : 0));
