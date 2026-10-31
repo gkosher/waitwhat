@@ -715,6 +715,18 @@ static int levenshtein(const wchar_t *a, int la, const wchar_t *b, int lb) {
   return row[lb];
 }
 
+/* is `in` exactly `ans` with one extra character inserted? ("hlt" -> "halt") */
+static int one_insertion(const wchar_t *ans, int la, const wchar_t *in, int lin) {
+  int i = 0, j = 0, skipped = 0;
+  if (lin != la + 1) { return 0; }
+  while (j < lin) {
+    if (i < la && ans[i] == in[j]) { i++; j++; }
+    else if (!skipped) { skipped = 1; j++; }
+    else { return 0; }
+  }
+  return i == la;
+}
+
 int check_answer(const char *const *answers, int n, const char *input) {
   wchar_t in[NORM_CAP], ans[NORM_CAP];
   int lin = normalize(input, in), i, best = ANSWER_WRONG;
@@ -726,6 +738,11 @@ int check_answer(const char *const *answers, int n, const char *input) {
     for (k = 0; k < la; k++) { if (iswdigit(ans[k])) { digits = 1; } }
     allowed = digits ? 0 : (la >= 10 ? 2 : (la >= 5 ? 1 : 0));
     if (allowed && abs(la - lin) <= allowed && levenshtein(ans, la, in, lin) <= allowed) {
+      best = ANSWER_CLOSE;
+    }
+    /* short answers (mnemonics like hlt, lgdt) only forgive one extra letter;
+    ** a swapped letter could be a different answer (eax/rax, cli/sti) */
+    if (!digits && la >= 3 && la < 5 && one_insertion(ans, la, in, lin)) {
       best = ANSWER_CLOSE;
     }
   }

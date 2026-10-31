@@ -82,7 +82,7 @@
     { "q": "Instruction that loads the task register?", "a": "ltr" },
     { "q": "Classic Linux i386 software interrupt for system calls?", "a": ["int 0x80", "0x80", "int 80h"] },
     { "q": "Fast x86-64 instruction pair for entering and leaving the kernel?", "a": ["syscall and sysret", "syscall sysret", "syscall/sysret"] },
-    { "q": "Instruction that idles the CPU until the next interrupt?", "a": "hlt" },
+    { "q": "Instruction that idles the CPU until the next interrupt?", "a": ["hlt", "halt"] },
     { "q": "Instruction prefix that makes a read-modify-write atomic across CPUs?", "a": "lock" },
     { "q": "Which x86 instruction is implicitly locked when used with memory and is handy for spinlocks?", "a": "xchg" },
     { "q": "Hint instruction to put inside a spinlock busy-wait loop?", "a": "pause" },
