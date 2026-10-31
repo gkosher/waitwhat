@@ -135,6 +135,7 @@ double rng01(void);
 
 int  autostart_get(void);
 void autostart_set(int on);
+void autostart_repair(void);
 
 /* --------------------------------------------------------------- net.c */
 

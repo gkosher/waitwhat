@@ -7,7 +7,8 @@ Written in C with [microui](https://github.com/rxi/microui) and a custom GDI ren
 ## Use it
 
 - Run `waitwhat.exe`. It sits in the system tray (the `?` icon).
-- **Left-click** the tray icon to open the manager. **Right-click** it for *Ask me now / Pause / Quit*.
+- **Left-click** the tray icon to open the manager. **Right-click** it for *Ask me now / Pause / Start with Windows / Quit*.
+- WaitWhat **starts with Windows** by default. To turn that off, untick it in the tray menu or in Settings. If you move the exe, the startup entry updates itself the next time you run it.
 - **Ctrl+Alt+W** anywhere asks a question now, or jumps to the one that's already open.
 - `waitwhat.exe --ask` does the same thing from a shortcut or script.
 - A question pops up in the bottom-right corner, at a random moment between the *at least* and *at most* times set in **Settings**. It never steals focus while you're typing in something else: click it, or press Ctrl+Alt+W.
@@ -92,3 +93,7 @@ build.bat
 ```
 
 `vendor/` holds microui (rxi, MIT) and cJSON (Dave Gamble, MIT).
+
+## License
+
+[MIT](LICENSE)

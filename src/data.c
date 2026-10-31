@@ -91,12 +91,13 @@ int data_init(void) {
   swprintf(dir_decks, MAX_PATH, L"%ls\\decks", dir_app);
   swprintf(path_progress, MAX_PATH, L"%ls\\progress.json", dir_app);
   swprintf(path_settings, MAX_PATH, L"%ls\\settings.json", dir_app);
+  /* no settings yet = first launch (decks may already ship with the app) */
+  first = GetFileAttributesW(path_settings) == INVALID_FILE_ATTRIBUTES;
   if (GetFileAttributesW(dir_decks) == INVALID_FILE_ATTRIBUTES) {
     wchar_t ex[MAX_PATH];
     CreateDirectoryW(dir_decks, NULL);
     swprintf(ex, MAX_PATH, L"%ls\\example-capitals.json", dir_decks);
     write_file(ex, EXAMPLE_DECK);
-    first = 1;
   }
   return first;
 }
@@ -170,17 +171,31 @@ void settings_save(void) {
   cJSON_Delete(root);
 }
 
+static void autostart_command(wchar_t *cmd, int cap) {
+  wchar_t exe[MAX_PATH];
+  GetModuleFileNameW(NULL, exe, MAX_PATH);
+  swprintf(cmd, cap, L"\"%ls\"", exe);
+}
+
 int autostart_get(void) {
   return RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, APP_NAMEW, RRF_RT_REG_SZ, NULL, NULL, NULL) == ERROR_SUCCESS;
+}
+
+/* if start-with-Windows is on but the exe has moved, point it at this copy */
+void autostart_repair(void) {
+  wchar_t cur[MAX_PATH + 4], want[MAX_PATH + 4];
+  DWORD sz = sizeof(cur);
+  if (RegGetValueW(HKEY_CURRENT_USER, RUN_KEY, APP_NAMEW, RRF_RT_REG_SZ, NULL, cur, &sz) != ERROR_SUCCESS) { return; }
+  autostart_command(want, MAX_PATH + 4);
+  if (_wcsicmp(cur, want) != 0) { autostart_set(1); }
 }
 
 void autostart_set(int on) {
   HKEY key;
   if (RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, 0, KEY_SET_VALUE, &key) != ERROR_SUCCESS) { return; }
   if (on) {
-    wchar_t exe[MAX_PATH], cmd[MAX_PATH + 4];
-    GetModuleFileNameW(NULL, exe, MAX_PATH);
-    swprintf(cmd, MAX_PATH + 4, L"\"%ls\"", exe);
+    wchar_t cmd[MAX_PATH + 4];
+    autostart_command(cmd, MAX_PATH + 4);
     RegSetValueExW(key, APP_NAMEW, 0, REG_SZ, (const BYTE*)cmd, (DWORD)((wcslen(cmd) + 1) * sizeof(wchar_t)));
   } else {
     RegDeleteValueW(key, APP_NAMEW);

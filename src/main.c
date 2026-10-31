@@ -10,7 +10,7 @@
 #define TRAY_CLASS   L"WaitWhatTray"
 #define HOTKEY_ID    1
 
-enum { MENU_ASK = 1, MENU_OPEN, MENU_PAUSE, MENU_QUIT };
+enum { MENU_ASK = 1, MENU_OPEN, MENU_PAUSE, MENU_STARTUP, MENU_QUIT };
 
 static HWND tray_hwnd;
 static NOTIFYICONDATAW nid;
@@ -18,6 +18,7 @@ static UINT msg_taskbar_created;
 static UiWindow *popup, *manager;
 static time_t next_due;
 static int settings_dirty;
+static int autostart_on; /* mirrors the registry Run entry */
 
 static void open_manager(void);
 static void ask_question(int from_user);
@@ -94,6 +95,7 @@ static void tray_menu(void) {
   AppendMenuW(m, MF_STRING, MENU_ASK, L"Ask me now\tCtrl+Alt+W");
   AppendMenuW(m, MF_STRING, MENU_OPEN, L"Open WaitWhat...");
   AppendMenuW(m, MF_STRING | (settings.paused ? MF_CHECKED : 0), MENU_PAUSE, L"Pause");
+  AppendMenuW(m, MF_STRING | (autostart_get() ? MF_CHECKED : 0), MENU_STARTUP, L"Start with Windows");
   AppendMenuW(m, MF_SEPARATOR, 0, NULL);
   AppendMenuW(m, MF_STRING, MENU_QUIT, L"Quit");
   SetMenuDefaultItem(m, MENU_OPEN, FALSE);
@@ -109,6 +111,11 @@ static void tray_menu(void) {
       settings.paused = !settings.paused;
       if (!settings.paused) { schedule_next(); }
       settings_save();
+      if (manager) { ui_refresh(manager); }
+      break;
+    case MENU_STARTUP:
+      autostart_on = !autostart_get();
+      autostart_set(autostart_on);
       if (manager) { ui_refresh(manager); }
       break;
     case MENU_QUIT: DestroyWindow(tray_hwnd); break;
@@ -329,7 +336,6 @@ static struct {
   int sel;              /* open deck, -1 = deck list */
   int confirm_del;      /* card index waiting for a second click */
   int confirm_reset;
-  int autostart;
   char new_deck[128];
   char add_q[512], add_a[512], add_note[512];
   char ai_topic[256];
@@ -340,7 +346,7 @@ static struct {
   char import_code[32];
   char net_msg[300];    /* share/import status line */
   int net_good;
-} mg = { TAB_DECKS, -1, -1, 0, 0, "", "", "", "", "", 30, 0, 0, 0, 0, 0, "", "", 0 };
+} mg = { .tab = TAB_DECKS, .sel = -1, .confirm_del = -1, .ai_count = 30 };
 
 static void net_status(mu_Context *ctx) {
   int full = -1;
@@ -578,7 +584,7 @@ static void settings_tab(mu_Context *ctx) {
   mu_layout_row(ctx, 1, &full, S(28));
   if (mu_checkbox(ctx, "Play a sound when a question pops up", &settings.sound) & MU_RES_CHANGE) { settings_dirty = 1; }
   if (mu_checkbox(ctx, "Wait while a fullscreen game or presentation is running", &settings.skip_fullscreen) & MU_RES_CHANGE) { settings_dirty = 1; }
-  if (mu_checkbox(ctx, "Start WaitWhat when Windows starts", &mg.autostart) & MU_RES_CHANGE) { autostart_set(mg.autostart); }
+  if (mu_checkbox(ctx, "Start WaitWhat when Windows starts", &autostart_on) & MU_RES_CHANGE) { autostart_set(autostart_on); }
   mu_layout_row(ctx, 1, &full, 0);
   ui_text_font(ctx, "Ctrl+Alt+W anywhere: ask a question now, or jump to the one that's open.", &font_small, COL_DIM);
 
@@ -706,7 +712,7 @@ static void open_manager(void) {
     SetForegroundWindow(manager->hwnd);
     return;
   }
-  mg.autostart = autostart_get();
+  autostart_on = autostart_get();
   SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
   manager = ui_create(APP_NAMEW, 0, wa.left + (wa.right - wa.left - width) / 2,
     wa.top + (wa.bottom - wa.top - height) / 2, width, height);
@@ -791,6 +797,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show) {
   first = data_init();
   ui_init();
   settings_load();
+  if (first) {
+    autostart_set(1); /* on by default; untick it in the tray menu or Settings */
+    settings_save();
+  }
+  autostart_repair();
   decks_load();
 
   memset(&wc, 0, sizeof(wc));
@@ -813,7 +824,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show) {
   if (ask) { ask_question(1); }
   if (first) {
     open_manager();
-    balloon("WaitWhat is running", "It lives here in the tray and will quiz you every now and then.");
+    balloon("WaitWhat is running", "It lives here in the tray, quizzes you every now and then, and starts with Windows (right-click to change).");
   }
 
   while (GetMessageW(&msg, NULL, 0, 0) > 0) {
