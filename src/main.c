@@ -419,6 +419,8 @@ static void build_prompt(char *out, int cap) {
     "- Put every reasonable alternative answer in the \"a\" list, including regional, dialect "
     "and alternate spellings (e.g. dlo / dilo / dolo).\n"
     "- Every question must make sense on its own. No multiple choice, no \"which of these\".\n"
+    "- If the topic is a language, only ask about the language itself (words, phrases, grammar, "
+    "translating short sentences), not its history, culture or trivia.\n"
     "- Go from the fundamentals towards more advanced facts.\n"
     "- Add a short \"note\" where extra context helps it stick.\n"
     "- If the file already exists, keep its cards and add new ones without duplicates.\n",
