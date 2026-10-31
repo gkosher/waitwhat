@@ -131,6 +131,7 @@ enum { RESULT_GAVE_UP = 3 };
 static struct {
   int answered;
   char deck[256];
+  char deck_file[MAX_PATH];
   char q[2048];
   char note[2048];
   char ans[16][512];
@@ -154,6 +155,7 @@ static void popup_submit(int gave_up) {
   pq.before = prog_get(pq.key);
   prog_record(pq.key, counted_right());
   progress_save();
+  history_add(pq.deck_file, 1, counted_right());
   pq.answered = 1;
 }
 
@@ -162,6 +164,7 @@ static void popup_override(void) {
   prog_set(pq.before);
   prog_record(pq.key, counted_right());
   progress_save();
+  history_add(pq.deck_file, 0, counted_right() ? 1 : -1);
 }
 
 static void popup_frame(UiWindow *w) {
@@ -289,7 +292,8 @@ static void ask_question(int from_user) {
 
   c = &decks[di].cards[ci];
   memset(&pq, 0, sizeof(pq));
-  snprintf(pq.deck, sizeof(pq.deck), "%s", decks[di].name);
+  snprintf(pq.deck, sizeof(pq.deck), "%s%s", decks[di].name, decks[di].mastered ? "  \xC2\xB7  review" : "");
+  snprintf(pq.deck_file, sizeof(pq.deck_file), "%s", decks[di].fname);
   snprintf(pq.q, sizeof(pq.q), "%s", c->q);
   snprintf(pq.note, sizeof(pq.note), "%s", c->note ? c->note : "");
   pq.nans = mu_min(c->nans, 16);
@@ -327,15 +331,17 @@ static void ask_question(int from_user) {
 
 /* ------------------------------------------------------------- manager */
 
-enum { TAB_DECKS, TAB_AI, TAB_SETTINGS };
+enum { TAB_DECKS, TAB_STATS, TAB_AI, TAB_SETTINGS };
 enum { ACT_NONE, ACT_CREATE, ACT_ADD, ACT_DELETE, ACT_RELOAD, ACT_FOLDER, ACT_RESET, ACT_COPY, ACT_ASK,
-       ACT_SHARE, ACT_IMPORT };
+       ACT_SHARE, ACT_IMPORT, ACT_RESET_DECK, ACT_MASTERED };
 
 static struct {
   int tab;
   int sel;              /* open deck, -1 = deck list */
   int confirm_del;      /* card index waiting for a second click */
   int confirm_reset;
+  int confirm_deck_reset;
+  int stats_deck;       /* deck shown in the Stats tab, -1 = all */
   char new_deck[128];
   char add_q[512], add_a[512], add_note[512];
   char ai_topic[256];
@@ -346,7 +352,7 @@ static struct {
   char import_code[32];
   char net_msg[300];    /* share/import status line */
   int net_good;
-} mg = { .tab = TAB_DECKS, .sel = -1, .confirm_del = -1, .ai_count = 30 };
+} mg = { .tab = TAB_DECKS, .sel = -1, .confirm_del = -1, .stats_deck = -1, .ai_count = 30 };
 
 static void net_status(mu_Context *ctx) {
   int full = -1;
@@ -439,12 +445,17 @@ static void deck_list(mu_Context *ctx) {
   for (i = 0; i < ndecks; i++) {
     Deck *d = &decks[i];
     mu_push_id(ctx, &i, sizeof(i));
-    mu_layout_row(ctx, 4, (int[]){ S(30), -S(250), S(160), -1 }, S(32));
+    mu_layout_row(ctx, 4, (int[]){ S(30), -S(280), S(190), -1 }, S(32));
     if (mu_checkbox(ctx, "", &d->enabled) & MU_RES_CHANGE) { settings_dirty = 1; }
     ui_label_font(ctx, d->name, &font_bold, d->enabled ? ctx->style->colors[MU_COLOR_TEXT] : COL_DIM);
-    snprintf(buf, sizeof(buf), "%d card%s  \xC2\xB7  %d learned", d->ncards, d->ncards == 1 ? "" : "s", deck_learned(d));
-    ui_label_color(ctx, buf, COL_DIM);
-    if (mu_button(ctx, "Open")) { mg.sel = i; mg.confirm_del = -1; }
+    if (d->mastered) {
+      snprintf(buf, sizeof(buf), "Mastered  \xC2\xB7  %d card%s", d->ncards, d->ncards == 1 ? "" : "s");
+      ui_label_color(ctx, buf, COL_GOOD);
+    } else {
+      snprintf(buf, sizeof(buf), "%d card%s  \xC2\xB7  %d learned", d->ncards, d->ncards == 1 ? "" : "s", deck_learned(d));
+      ui_label_color(ctx, buf, COL_DIM);
+    }
+    if (mu_button(ctx, "Open")) { mg.sel = i; mg.confirm_del = -1; mg.confirm_deck_reset = 0; }
     if (d->err[0]) {
       mu_layout_row(ctx, 2, (int[]){ S(30), -1 }, 0);
       mu_layout_next(ctx);
@@ -474,13 +485,54 @@ static void deck_list(mu_Context *ctx) {
   ui_text_font(ctx, buf, &font_small, COL_DIM);
 }
 
+/* learned bar, recent accuracy, mastered + reset buttons */
+static void deck_progress(mu_Context *ctx, Deck *d) {
+  int full = -1, learned = deck_learned(d), pct = d->ncards ? learned * 100 / d->ncards : 0;
+  Tally week = history_range(7, d->fname);
+  mu_Rect r;
+  char buf[256];
+
+  ui_spacer(ctx, S(2));
+  mu_layout_row(ctx, 1, &full, S(6));
+  r = mu_layout_next(ctx);
+  ui_fill_round(ctx, r, mu_color(48, 50, 62, 255), r.h / 2);
+  if (pct > 0) { ui_fill_round(ctx, mu_rect(r.x, r.y, mu_max(r.h, r.w * pct / 100), r.h), d->mastered || pct == 100 ? COL_GOOD : COL_ACCENT, r.h / 2); }
+
+  if (week.n) {
+    snprintf(buf, sizeof(buf), "%d of %d learned (%d%%)  \xC2\xB7  last 7 days: %d answers, %d%% right",
+      learned, d->ncards, pct, week.n, week.right * 100 / week.n);
+  } else {
+    snprintf(buf, sizeof(buf), "%d of %d learned (%d%%)  \xC2\xB7  not practiced in the last 7 days", learned, d->ncards, pct);
+  }
+  mu_layout_row(ctx, 1, &full, S(22));
+  ui_label_font(ctx, buf, &font_small, COL_DIM);
+  if (!d->mastered && d->ncards && learned == d->ncards) {
+    mu_layout_row(ctx, 1, &full, 0);
+    ui_text_font(ctx, "You've learned every card in this deck. Mark it as mastered to only see it now and then for review.", &font_small, COL_GOOD);
+  }
+
+  mu_layout_row(ctx, 2, (int[]){ S(170), S(170) }, S(32));
+  if (d->mastered ? mu_button(ctx, "Unmark mastered") : ui_accent_button(ctx, "Mark as mastered")) {
+    mg.action = ACT_MASTERED;
+    mg.act_deck = mg.sel;
+  }
+  if (mu_button(ctx, mg.confirm_deck_reset ? "Click again to reset" : "Reset progress")) {
+    if (mg.confirm_deck_reset) { mg.action = ACT_RESET_DECK; mg.act_deck = mg.sel; mg.confirm_deck_reset = 0; }
+    else { mg.confirm_deck_reset = 1; }
+  }
+  if (d->mastered) {
+    mu_layout_row(ctx, 1, &full, 0);
+    ui_text_font(ctx, "Mastered: questions from this deck only come up now and then, for review. Untick the deck to stop them completely.", &font_small, COL_DIM);
+  }
+}
+
 static void deck_view(mu_Context *ctx) {
   Deck *d = &decks[mg.sel];
   int full = -1, i, add = 0, cw;
   char buf[256];
 
   mu_layout_row(ctx, 3, (int[]){ S(80), -S(90), -1 }, S(32));
-  if (mu_button(ctx, "Back")) { mg.sel = -1; mg.net_msg[0] = 0; return; }
+  if (mu_button(ctx, "Back")) { mg.sel = -1; mg.net_msg[0] = 0; mg.confirm_deck_reset = 0; return; }
   snprintf(buf, sizeof(buf), "%s  (%d cards, %d learned)", d->name, d->ncards, deck_learned(d));
   ui_label_font(ctx, buf, &font_bold, ctx->style->colors[MU_COLOR_TEXT]);
   if (mu_button(ctx, net_job.running ? "..." : "Share")) { mg.action = ACT_SHARE; mg.act_deck = mg.sel; }
@@ -489,6 +541,7 @@ static void deck_view(mu_Context *ctx) {
     mu_layout_row(ctx, 1, &full, 0);
     ui_text_font(ctx, d->err, &font_small, COL_BAD);
   }
+  deck_progress(ctx, d);
 
   ui_heading(ctx, "Add a card");
   mu_layout_row(ctx, 2, (int[]){ S(80), -1 }, S(32));
@@ -556,6 +609,153 @@ static void ai_tab(mu_Context *ctx) {
   ui_text_font(ctx, prompt, &font_small, COL_DIM);
 }
 
+static mu_Color accuracy_color(int pct) {
+  return pct >= 80 ? COL_GOOD : (pct >= 50 ? COL_WARN : COL_BAD);
+}
+
+static void percent(Tally t, char *out, int cap) {
+  if (t.n) { snprintf(out, cap, "%d%%", t.right * 100 / t.n); }
+  else { snprintf(out, cap, "-"); }
+}
+
+static void stat_tile(mu_Context *ctx, const char *value, const char *label, mu_Color color) {
+  mu_Rect r = mu_layout_next(ctx);
+  ui_fill_round(ctx, r, mu_color(30, 31, 38, 255), S(8));
+  mu_draw_text(ctx, &font_big, value, -1, mu_vec2(r.x + S(12), r.y + S(10)), color);
+  mu_draw_text(ctx, &font_small, label, -1, mu_vec2(r.x + S(12), r.y + S(14) + font_big.height), COL_DIM);
+}
+
+static void accuracy_chart(mu_Context *ctx, const char *fname) {
+  const int days = 30;
+  int full = -1, i, hovered = -1;
+  mu_Rect r, plot;
+  char buf[128], day[32];
+
+  mu_layout_row(ctx, 1, &full, S(160));
+  r = mu_layout_next(ctx);
+  ui_fill_round(ctx, r, mu_color(27, 28, 34, 255), S(8));
+  plot = mu_rect(r.x + S(44), r.y + S(14), r.w - S(58), r.h - S(28));
+
+  /* gridlines at 0 / 50 / 100% */
+  for (i = 0; i <= 100; i += 50) {
+    int y = plot.y + plot.h - plot.h * i / 100;
+    snprintf(buf, sizeof(buf), "%d%%", i);
+    mu_draw_rect(ctx, mu_rect(plot.x, y, plot.w, 1), mu_color(44, 46, 56, 255));
+    mu_draw_text(ctx, &font_small, buf, -1, mu_vec2(r.x + S(10), y - font_small.height / 2), COL_DIM);
+  }
+
+  for (i = 0; i < days; i++) {
+    int ago = days - 1 - i;
+    int x0 = plot.x + plot.w * i / days, x1 = plot.x + plot.w * (i + 1) / days;
+    int bw = mu_max(S(2), (x1 - x0) - S(4)), bx = x0 + ((x1 - x0) - bw) / 2;
+    Tally t = history_day(ago, fname);
+    if (mu_mouse_over(ctx, mu_rect(x0, r.y, x1 - x0, r.h))) {
+      hovered = ago;
+      ui_fill_round(ctx, mu_rect(x0, plot.y, x1 - x0, plot.h), mu_color(255, 255, 255, 10), S(3));
+    }
+    if (t.n) {
+      int pct = t.right * 100 / t.n, h = mu_max(S(3), plot.h * pct / 100);
+      ui_fill_round(ctx, mu_rect(bx, plot.y + plot.h - h, bw, h), accuracy_color(pct), mu_min(S(3), bw / 2));
+    } else {
+      ui_fill_round(ctx, mu_rect(bx, plot.y + plot.h - S(2), bw, S(2)), mu_color(58, 61, 74, 255), 1);
+    }
+  }
+
+  /* date labels every 7 days, counting back from today */
+  mu_layout_row(ctx, 1, &full, font_small.height + S(2));
+  r = mu_layout_next(ctx);
+  for (i = days - 1; i >= 0; i -= 7) {
+    int ago = days - 1 - i, cx = plot.x + plot.w * i / days + plot.w / days / 2, w;
+    if (ago == 0) { snprintf(day, sizeof(day), "today"); }
+    else { history_day_label(ago, day, sizeof(day)); }
+    w = ctx->text_width(&font_small, day, -1);
+    mu_draw_text(ctx, &font_small, day, -1, mu_vec2(cx - w / 2, r.y), COL_DIM);
+  }
+
+  mu_layout_row(ctx, 1, &full, S(22));
+  if (hovered >= 0) {
+    Tally t = history_day(hovered, fname);
+    history_day_label(hovered, day, sizeof(day));
+    if (t.n) {
+      snprintf(buf, sizeof(buf), "%s: %d of %d right (%d%%)", day, t.right, t.n, t.right * 100 / t.n);
+      ui_label_color(ctx, buf, accuracy_color(t.right * 100 / t.n));
+    } else {
+      snprintf(buf, sizeof(buf), "%s: no answers", day);
+      ui_label_color(ctx, buf, COL_DIM);
+    }
+  } else {
+    ui_label_font(ctx, "Bar height is the % you got right that day. Hover a bar for details.", &font_small, COL_DIM);
+  }
+}
+
+static void stats_tab(mu_Context *ctx) {
+  int i, tw, streak;
+  const char *fname;
+  char value[32], label[96];
+  mu_Font old;
+  Tally t;
+
+  if (mg.stats_deck >= ndecks) { mg.stats_deck = -1; }
+  fname = mg.stats_deck >= 0 ? decks[mg.stats_deck].fname : NULL;
+
+  /* which deck to show */
+  mu_layout_row(ctx, 3, (int[]){ S(36), -S(42), -1 }, S(32));
+  if (mu_button(ctx, "<")) { mg.stats_deck = mg.stats_deck < 0 ? ndecks - 1 : mg.stats_deck - 1; }
+  old = ctx->style->font;
+  ctx->style->font = &font_bold;
+  mu_draw_control_text(ctx, fname ? decks[mg.stats_deck].name : "All decks", mu_layout_next(ctx), MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
+  ctx->style->font = old;
+  if (mu_button(ctx, ">")) { mg.stats_deck = mg.stats_deck >= ndecks - 1 ? -1 : mg.stats_deck + 1; }
+
+  ui_spacer(ctx, S(2));
+  tw = (mu_get_current_container(ctx)->body.w - ctx->style->padding * 2 - ctx->style->spacing * 3) / 4;
+  mu_layout_row(ctx, 4, (int[]){ tw, tw, tw, -1 }, S(68));
+  t = history_day(0, fname);
+  percent(t, value, sizeof(value));
+  snprintf(label, sizeof(label), "today  \xC2\xB7  %d answered", t.n);
+  stat_tile(ctx, value, label, t.n ? accuracy_color(t.right * 100 / t.n) : COL_DIM);
+  t = history_range(7, fname);
+  percent(t, value, sizeof(value));
+  snprintf(label, sizeof(label), "last 7 days  \xC2\xB7  %d", t.n);
+  stat_tile(ctx, value, label, t.n ? accuracy_color(t.right * 100 / t.n) : COL_DIM);
+  t = history_range(0, fname);
+  percent(t, value, sizeof(value));
+  snprintf(label, sizeof(label), "all time  \xC2\xB7  %d", t.n);
+  stat_tile(ctx, value, label, t.n ? accuracy_color(t.right * 100 / t.n) : COL_DIM);
+  streak = history_streak();
+  snprintf(value, sizeof(value), "%d", streak);
+  stat_tile(ctx, value, "day streak", streak ? COL_ACCENT : COL_DIM);
+
+  ui_heading(ctx, "Accuracy, last 30 days");
+  accuracy_chart(ctx, fname);
+
+  ui_heading(ctx, "By deck");
+  mu_layout_row(ctx, 4, (int[]){ -S(300), S(100), S(100), -1 }, S(22));
+  ui_label_font(ctx, "Deck", &font_small, COL_DIM);
+  ui_label_font(ctx, "Learned", &font_small, COL_DIM);
+  ui_label_font(ctx, "Last 7 days", &font_small, COL_DIM);
+  ui_label_font(ctx, "All time", &font_small, COL_DIM);
+  for (i = 0; i < ndecks; i++) {
+    Deck *d = &decks[i];
+    Tally week = history_range(7, d->fname), all = history_range(0, d->fname);
+    mu_push_id(ctx, &i, sizeof(i));
+    mu_layout_row(ctx, 4, (int[]){ -S(300), S(100), S(100), -1 }, S(28));
+    if (d->mastered) {
+      snprintf(label, sizeof(label), "%s  \xC2\xB7  mastered", d->name);
+      ui_label_color(ctx, label, COL_GOOD);
+    } else {
+      ui_label_color(ctx, d->name, d->enabled ? ctx->style->colors[MU_COLOR_TEXT] : COL_DIM);
+    }
+    snprintf(value, sizeof(value), "%d%%", d->ncards ? deck_learned(d) * 100 / d->ncards : 0);
+    mu_label(ctx, value);
+    percent(week, value, sizeof(value));
+    ui_label_color(ctx, value, week.n ? accuracy_color(week.right * 100 / week.n) : COL_DIM);
+    percent(all, value, sizeof(value));
+    ui_label_color(ctx, value, all.n ? accuracy_color(all.right * 100 / all.n) : COL_DIM);
+    mu_pop_id(ctx);
+  }
+}
+
 static void settings_tab(mu_Context *ctx) {
   int full = -1, answered, right, learned, total;
   char buf[256];
@@ -619,8 +819,9 @@ static void manager_frame(UiWindow *w) {
   char status[96];
   if (!ui_begin_main(w, MU_OPT_NOSCROLL)) { return; }
 
-  mu_layout_row(ctx, 5, (int[]){ S(80), S(100), S(90), -S(110), -1 }, S(32));
+  mu_layout_row(ctx, 6, (int[]){ S(80), S(76), S(100), S(90), -S(110), -1 }, S(32));
   tab_button(ctx, "Decks", TAB_DECKS);
+  tab_button(ctx, "Stats", TAB_STATS);
   tab_button(ctx, "AI prompt", TAB_AI);
   tab_button(ctx, "Settings", TAB_SETTINGS);
   status_text(status, sizeof(status));
@@ -632,6 +833,10 @@ static void manager_frame(UiWindow *w) {
     if (mg.sel >= ndecks) { mg.sel = -1; }
     mu_begin_panel_ex(ctx, mg.sel < 0 ? "decks" : "cards", MU_OPT_NOFRAME);
     if (mg.sel < 0) { deck_list(ctx); } else { deck_view(ctx); }
+    mu_end_panel(ctx);
+  } else if (mg.tab == TAB_STATS) {
+    mu_begin_panel_ex(ctx, "stats", MU_OPT_NOFRAME);
+    stats_tab(ctx);
     mu_end_panel(ctx);
   } else if (mg.tab == TAB_AI) {
     mu_begin_panel_ex(ctx, "ai", MU_OPT_NOFRAME);
@@ -678,6 +883,11 @@ static void manager_post(UiWindow *w) {
       break;
     }
     case ACT_ASK: ask_question(1); break;
+    case ACT_MASTERED:
+      decks[mg.act_deck].mastered = !decks[mg.act_deck].mastered;
+      settings_save();
+      break;
+    case ACT_RESET_DECK: deck_reset_progress(mg.act_deck); break;
     case ACT_SHARE:
     case ACT_IMPORT:
       if (!net_job.running) {

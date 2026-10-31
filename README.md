@@ -74,6 +74,12 @@ Each card has a level from 0 to 5. A right answer moves it up one level and a mi
 
 A card you haven't seen in a while gets a boost of up to 3x. The boost builds faster on low-level cards. Level 4 and up counts as "learned".
 
+### Tracking progress
+
+- **Stats tab:** shows accuracy for today, the last 7 days and all time, plus your day streak. There's also a 30-day accuracy chart (hover a bar for that day's numbers) and a per-deck breakdown. Use `<` / `>` to switch between all decks and a single deck.
+- **Mastered:** open a deck and click **Mark as mastered**. Its questions then only come up occasionally, for review (each card is about 7× less likely to be picked). The app suggests this once every card in the deck is learned. Untick the deck if you want it to stop completely.
+- **Reset progress:** each deck has a **Reset progress** button that sends all of its cards back to level 0.
+
 Answer checking ignores case and punctuation ("Washington, D.C." = "washington dc"). It forgives one or two typos on longer words, but never on numbers.
 
 ## Files
@@ -82,7 +88,8 @@ Answer checking ignores case and punctuation ("Washington, D.C." = "washington d
 |---|---|
 | `decks/*.json` | your question sets |
 | `progress.json` | level / stats per card, keyed by deck file + question text |
-| `settings.json` | timing, sound, disabled decks, sharing server |
+| `settings.json` | timing, sound, disabled / mastered decks, sharing server |
+| `history.json` | answers and right answers per day and deck, for the Stats tab |
 
 ## Build
 

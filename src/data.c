@@ -11,11 +11,9 @@ int ndecks;
 Settings settings = { 10, 30, 0, 1, 1, DEFAULT_SERVER };
 wchar_t dir_app[MAX_PATH], dir_decks[MAX_PATH];
 
-static wchar_t path_progress[MAX_PATH], path_settings[MAX_PATH];
+static wchar_t path_progress[MAX_PATH], path_settings[MAX_PATH], path_history[MAX_PATH];
 static Prog *progs;
 static int nprogs, cprogs;
-static char **disabled;
-static int ndisabled;
 
 static const wchar_t *RUN_KEY = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 
@@ -91,6 +89,7 @@ int data_init(void) {
   swprintf(dir_decks, MAX_PATH, L"%ls\\decks", dir_app);
   swprintf(path_progress, MAX_PATH, L"%ls\\progress.json", dir_app);
   swprintf(path_settings, MAX_PATH, L"%ls\\settings.json", dir_app);
+  swprintf(path_history, MAX_PATH, L"%ls\\history.json", dir_app);
   /* no settings yet = first launch (decks may already ship with the app) */
   first = GetFileAttributesW(path_settings) == INVALID_FILE_ATTRIBUTES;
   if (GetFileAttributesW(dir_decks) == INVALID_FILE_ATTRIBUTES) {
@@ -105,10 +104,50 @@ int data_init(void) {
 
 /* ------------------------------------------------------------ settings */
 
-static int is_disabled(const char *fname) {
+/* deck file names remembered in settings.json (disabled, mastered) */
+typedef struct { char **names; int n; } NameList;
+static NameList disabled, mastered;
+
+static int list_has(const NameList *l, const char *fname) {
   int i;
-  for (i = 0; i < ndisabled; i++) { if (_stricmp(disabled[i], fname) == 0) { return 1; } }
+  for (i = 0; i < l->n; i++) { if (_stricmp(l->names[i], fname) == 0) { return 1; } }
   return 0;
+}
+
+static void list_load(NameList *l, cJSON *arr) {
+  cJSON *it;
+  cJSON_ArrayForEach(it, arr) {
+    if (cJSON_IsString(it)) {
+      l->names = realloc(l->names, sizeof(char*) * (l->n + 1));
+      l->names[l->n++] = _strdup(it->valuestring);
+    }
+  }
+}
+
+/* rebuild a list from the decks we know about, keeping names of decks that
+** are currently missing (e.g. a file being rewritten) */
+static int deck_is_off(const Deck *d) { return !d->enabled; }
+static int deck_is_mastered(const Deck *d) { return d->mastered; }
+
+static void list_save(NameList *l, cJSON *root, const char *key, int (*want)(const Deck*)) {
+  cJSON *arr = cJSON_AddArrayToObject(root, key);
+  NameList out = { NULL, 0 };
+  int i, j;
+  for (i = 0; i < l->n; i++) {
+    int known = 0;
+    for (j = 0; j < ndecks; j++) { if (_stricmp(decks[j].fname, l->names[i]) == 0) { known = 1; } }
+    if (!known) { out.names = realloc(out.names, sizeof(char*) * (out.n + 1)); out.names[out.n++] = l->names[i]; }
+    else { free(l->names[i]); }
+  }
+  for (j = 0; j < ndecks; j++) {
+    if (want(&decks[j])) {
+      out.names = realloc(out.names, sizeof(char*) * (out.n + 1));
+      out.names[out.n++] = _strdup(decks[j].fname);
+    }
+  }
+  free(l->names);
+  *l = out;
+  for (i = 0; i < l->n; i++) { cJSON_AddItemToArray(arr, cJSON_CreateString(l->names[i])); }
 }
 
 static double num(cJSON *obj, const char *key, double def) {
@@ -123,7 +162,7 @@ static int flag(cJSON *obj, const char *key, int def) {
 
 void settings_load(void) {
   char *txt = read_file(path_settings);
-  cJSON *root, *dis, *it;
+  cJSON *root, *it;
   if (!txt) { return; }
   root = cJSON_Parse(txt);
   free(txt);
@@ -137,36 +176,21 @@ void settings_load(void) {
   if (cJSON_IsString(it)) { snprintf(settings.server, sizeof(settings.server), "%s", it->valuestring); }
   if (settings.min_minutes < 1) { settings.min_minutes = 1; }
   if (settings.max_minutes < settings.min_minutes) { settings.max_minutes = settings.min_minutes; }
-  dis = cJSON_GetObjectItemCaseSensitive(root, "disabled");
-  cJSON_ArrayForEach(it, dis) {
-    if (cJSON_IsString(it)) {
-      disabled = realloc(disabled, sizeof(char*) * (ndisabled + 1));
-      disabled[ndisabled++] = _strdup(it->valuestring);
-    }
-  }
+  list_load(&disabled, cJSON_GetObjectItemCaseSensitive(root, "disabled"));
+  list_load(&mastered, cJSON_GetObjectItemCaseSensitive(root, "mastered"));
   cJSON_Delete(root);
 }
 
 void settings_save(void) {
-  cJSON *root = cJSON_CreateObject(), *dis;
-  int i;
+  cJSON *root = cJSON_CreateObject();
   cJSON_AddNumberToObject(root, "min_minutes", settings.min_minutes);
   cJSON_AddNumberToObject(root, "max_minutes", settings.max_minutes);
   cJSON_AddBoolToObject(root, "paused", settings.paused);
   cJSON_AddBoolToObject(root, "sound", settings.sound);
   cJSON_AddBoolToObject(root, "skip_fullscreen", settings.skip_fullscreen);
   cJSON_AddStringToObject(root, "server", settings.server);
-  dis = cJSON_AddArrayToObject(root, "disabled");
-  /* rebuild the disabled list from the decks we know about */
-  for (i = 0; i < ndisabled; i++) { free(disabled[i]); }
-  ndisabled = 0;
-  for (i = 0; i < ndecks; i++) {
-    if (!decks[i].enabled) {
-      cJSON_AddItemToArray(dis, cJSON_CreateString(decks[i].fname));
-      disabled = realloc(disabled, sizeof(char*) * (ndisabled + 1));
-      disabled[ndisabled++] = _strdup(decks[i].fname);
-    }
-  }
+  list_save(&disabled, root, "disabled", deck_is_off);
+  list_save(&mastered, root, "mastered", deck_is_mastered);
   write_json(path_settings, root);
   cJSON_Delete(root);
 }
@@ -318,6 +342,130 @@ void progress_stats(int *answered, int *right, int *learned, int *total) {
 }
 
 
+void deck_reset_progress(int di) {
+  int i, j;
+  for (i = 0; i < decks[di].ncards; i++) {
+    for (j = 0; j < nprogs; j++) {
+      if (progs[j].key == decks[di].cards[i].key) { progs[j] = progs[--nprogs]; break; }
+    }
+  }
+  progress_save();
+}
+
+
+/* ------------------------------------------------------------- history */
+
+/* history.json: { "2026-10-31": { "deck.json": [answers, right], ... }, ... } */
+typedef struct { char day[11]; char deck[MAX_PATH]; Tally t; } HistEntry;
+static HistEntry *hist;
+static int nhist, hist_loaded;
+
+static void day_key(int days_ago, char out[11]) {
+  time_t t = time(NULL) - (time_t)days_ago * 86400;
+  struct tm *lt = localtime(&t);
+  strftime(out, 11, "%Y-%m-%d", lt);
+}
+
+static void history_load(void) {
+  char *txt;
+  cJSON *root, *day, *deck;
+  hist_loaded = 1;
+  txt = read_file(path_history);
+  if (!txt) { return; }
+  root = cJSON_Parse(txt);
+  free(txt);
+  cJSON_ArrayForEach(day, root) {
+    cJSON_ArrayForEach(deck, day) {
+      HistEntry *e;
+      if (cJSON_GetArraySize(deck) != 2) { continue; }
+      hist = realloc(hist, sizeof(HistEntry) * (nhist + 1));
+      e = &hist[nhist++];
+      snprintf(e->day, sizeof(e->day), "%s", day->string);
+      snprintf(e->deck, sizeof(e->deck), "%s", deck->string);
+      e->t.n = cJSON_GetArrayItem(deck, 0)->valueint;
+      e->t.right = cJSON_GetArrayItem(deck, 1)->valueint;
+    }
+  }
+  cJSON_Delete(root);
+}
+
+static void history_save(void) {
+  cJSON *root = cJSON_CreateObject();
+  int i;
+  for (i = 0; i < nhist; i++) {
+    cJSON *day = cJSON_GetObjectItemCaseSensitive(root, hist[i].day), *pair;
+    if (!day) { day = cJSON_AddObjectToObject(root, hist[i].day); }
+    pair = cJSON_AddArrayToObject(day, hist[i].deck);
+    cJSON_AddItemToArray(pair, cJSON_CreateNumber(hist[i].t.n));
+    cJSON_AddItemToArray(pair, cJSON_CreateNumber(hist[i].t.right));
+  }
+  write_json(path_history, root);
+  cJSON_Delete(root);
+}
+
+void history_add(const char *deck_fname, int n, int right) {
+  char today[11];
+  int i;
+  if (!hist_loaded) { history_load(); }
+  day_key(0, today);
+  for (i = 0; i < nhist; i++) {
+    if (strcmp(hist[i].day, today) == 0 && _stricmp(hist[i].deck, deck_fname) == 0) { break; }
+  }
+  if (i == nhist) {
+    hist = realloc(hist, sizeof(HistEntry) * (nhist + 1));
+    memset(&hist[nhist], 0, sizeof(HistEntry));
+    snprintf(hist[nhist].day, sizeof(hist[nhist].day), "%s", today);
+    snprintf(hist[nhist].deck, sizeof(hist[nhist].deck), "%s", deck_fname);
+    nhist++;
+  }
+  hist[i].t.n += n;
+  hist[i].t.right += right;
+  history_save();
+}
+
+static Tally tally_where(const char *day, const char *deck_fname) {
+  Tally t = { 0, 0 };
+  int i;
+  if (!hist_loaded) { history_load(); }
+  for (i = 0; i < nhist; i++) {
+    if (day && strcmp(hist[i].day, day) != 0) { continue; }
+    if (deck_fname && _stricmp(hist[i].deck, deck_fname) != 0) { continue; }
+    t.n += hist[i].t.n;
+    t.right += hist[i].t.right;
+  }
+  return t;
+}
+
+Tally history_day(int days_ago, const char *deck_fname) {
+  char day[11];
+  day_key(days_ago, day);
+  return tally_where(day, deck_fname);
+}
+
+Tally history_range(int days, const char *deck_fname) {
+  Tally t = { 0, 0 };
+  int i;
+  if (days <= 0) { return tally_where(NULL, deck_fname); }
+  for (i = 0; i < days; i++) {
+    Tally d = history_day(i, deck_fname);
+    t.n += d.n;
+    t.right += d.right;
+  }
+  return t;
+}
+
+int history_streak(void) {
+  /* today counts if you've answered; otherwise the streak is still alive from yesterday */
+  int start = history_day(0, NULL).n > 0 ? 0 : 1, i;
+  for (i = start; history_day(i, NULL).n > 0; i++) { }
+  return i - start;
+}
+
+void history_day_label(int days_ago, char *out, int cap) {
+  time_t t = time(NULL) - (time_t)days_ago * 86400;
+  strftime(out, cap, "%b %d", localtime(&t));
+}
+
 /* --------------------------------------------------------------- decks */
 
 static void decks_free(void) {
@@ -454,7 +602,8 @@ void decks_load(void) {
   free(ents);
   qsort(decks, ndecks, sizeof(Deck), cmp_deck);
   for (i = 0; i < ndecks; i++) {
-    decks[i].enabled = !is_disabled(decks[i].fname);
+    decks[i].enabled = !list_has(&disabled, decks[i].fname);
+    decks[i].mastered = list_has(&mastered, decks[i].fname);
     deck_parse(&decks[i]);
   }
 }
@@ -642,13 +791,17 @@ double rng01(void) {
 /* Leitner-style weighting: cards you keep missing come up a lot, cards you
 ** know come up rarely, and anything you haven't seen in a while gets a
 ** gentle boost. It is still a weighted random draw, so repeats can happen. */
-static double card_weight(const Card *c, long long now) {
+static double card_weight(const Deck *d, const Card *c, long long now) {
   static const double box_weight[MAX_BOX + 1] = { 10, 6, 4, 2.5, 1.5, 1 };
   Prog *p = prog_find(c->key);
-  double days;
-  if (!p || !p->seen) { return 8; }
-  days = (now - p->last) / 86400.0;
-  return box_weight[p->box] * (1.0 + fmin(2.0, days / (double)(1 << p->box)));
+  double days, w;
+  if (!p || !p->seen) { w = 8; }
+  else {
+    days = (now - p->last) / 86400.0;
+    w = box_weight[p->box] * (1.0 + fmin(2.0, days / (double)(1 << p->box)));
+  }
+  /* mastered decks still come up now and then, to keep them fresh */
+  return d->mastered ? w * MASTERED_WEIGHT : w;
 }
 
 int pick_card(int *out_deck, int *out_card) {
@@ -657,7 +810,7 @@ int pick_card(int *out_deck, int *out_card) {
   int i, j;
   for (i = 0; i < ndecks; i++) {
     if (!decks[i].enabled) { continue; }
-    for (j = 0; j < decks[i].ncards; j++) { total += card_weight(&decks[i].cards[j], now); }
+    for (j = 0; j < decks[i].ncards; j++) { total += card_weight(&decks[i], &decks[i].cards[j], now); }
   }
   if (total <= 0) { return 0; }
   r = rng01() * total;
@@ -666,7 +819,7 @@ int pick_card(int *out_deck, int *out_card) {
     for (j = 0; j < decks[i].ncards; j++) {
       *out_deck = i;
       *out_card = j;
-      r -= card_weight(&decks[i].cards[j], now);
+      r -= card_weight(&decks[i], &decks[i].cards[j], now);
       if (r < 0) { return 1; }
     }
   }

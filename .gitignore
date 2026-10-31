@@ -10,3 +10,4 @@ settings.json
 # server
 server/node_modules/
 server/.wrangler/
+history.json

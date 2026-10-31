@@ -89,6 +89,7 @@ typedef struct {
   Card *cards;
   int ncards;
   int enabled;
+  int mastered;  /* only shows up now and then for review */
   char err[160];
 } Deck;
 
@@ -125,6 +126,16 @@ void progress_save(void);
 void progress_reset(void);
 void progress_stats(int *answered, int *right, int *learned, int *total);
 int  deck_learned(Deck *d);
+void deck_reset_progress(int di);
+
+/* answer history, bucketed per local day and deck file */
+#define MASTERED_WEIGHT 0.15
+typedef struct { int n, right; } Tally;
+void  history_add(const char *deck_fname, int n, int right);
+Tally history_day(int days_ago, const char *deck_fname); /* deck NULL = all decks */
+Tally history_range(int days, const char *deck_fname);   /* last N days, 0 = all time */
+int   history_streak(void);                               /* days in a row with answers */
+void  history_day_label(int days_ago, char *out, int cap);
 
 int  pick_card(int *deck, int *card);
 int  check_answer(const char *const *answers, int n, const char *input);
